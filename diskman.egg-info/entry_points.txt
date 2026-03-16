@@ -1,0 +1,2 @@
+[console_scripts]
+diskman = disk_cleanup.__main__:main

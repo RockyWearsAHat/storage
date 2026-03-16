@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Launch GitHub Copilot CLI as the disk management agent.
+#
+# This starts an interactive Copilot session that:
+# - Reads AGENTS.md and .github/copilot-instructions.md for context
+# - Can run `storage` commands to query your disk and manage files
+# - Blocks raw `rm` so all deletions go through `storage rm` safety checks
+# - Requires your approval before running any shell command
+#
+# Usage:
+#   ./disk-copilot              # interactive session
+#   ./disk-copilot "what's using all my space?"   # one-shot prompt
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Make sure `storage` is on PATH
+if ! command -v storage &>/dev/null; then
+    # Fall back to running via python module
+    storage() { python3 -m disk_cleanup "$@"; }
+    export -f storage
+fi
+
+cd "$SCRIPT_DIR"
+
+if [[ $# -gt 0 ]]; then
+    # One-shot mode: run a single prompt
+    exec copilot \
+        --deny-tool='shell(rm)' \
+        --deny-tool='shell(rmdir)' \
+        --deny-tool='shell(find)' \
+        --allow-tool='shell(storage)' \
+        -p "$*"
+else
+    # Interactive mode
+    exec copilot \
+        --deny-tool='shell(rm)' \
+        --deny-tool='shell(rmdir)' \
+        --deny-tool='shell(find)' \
+        --allow-tool='shell(storage)'
+fi

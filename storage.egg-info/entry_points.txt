@@ -1,0 +1,2 @@
+[console_scripts]
+storage = disk_cleanup.__main__:main

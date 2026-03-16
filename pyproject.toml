@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "storage"
+version = "2.0.0"
+description = "AI-assisted macOS disk management tool"
+requires-python = ">=3.11"
+dependencies = [
+    "rich>=13.0",
+]
+
+[project.scripts]
+storage = "disk_cleanup.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["disk_cleanup*"]
