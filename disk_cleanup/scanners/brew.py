@@ -12,6 +12,10 @@ BREW_CACHE_DIRS = [
     Path("/usr/local/Cellar"),  # Intel Mac
 ]
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = [HOME / "Library" / "Caches" / "Homebrew"]
+SCAN_DEPTH = 0
+
 
 def scan_brew(config: Config) -> list[CleanupItem]:
     """Find Homebrew caches."""

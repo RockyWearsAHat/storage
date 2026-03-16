@@ -6,6 +6,10 @@ from disk_cleanup.config import Config, HOME
 from disk_cleanup.scanners import Category, CleanupItem, RiskLevel
 from disk_cleanup.utils import dir_size
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = [HOME / ".Trash"]
+SCAN_DEPTH = 0
+
 
 def scan_trash(config: Config) -> list[CleanupItem]:
     """Check how much space Trash is using."""

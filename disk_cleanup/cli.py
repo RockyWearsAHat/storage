@@ -20,6 +20,7 @@ from disk_cleanup.ai_advisor import (
 from disk_cleanup.cleaner import delete_items
 from disk_cleanup.config import Config, HOME
 from disk_cleanup.disk_map import DirNode, drill_into, get_full_disk_breakdown, map_disk
+from disk_cleanup.locks import filter_locked, is_locked, partition_locked
 from disk_cleanup.scanner import run_scan
 from disk_cleanup.scanners import CATEGORY_LABELS, Category, CleanupItem, RiskLevel, ScanResult
 from disk_cleanup.utils import format_size, get_disk_usage
@@ -53,7 +54,8 @@ def show_banner():
 
 
 def show_disk_overview():
-    """Show current disk usage."""
+    """Show current disk usage with a visual panel."""
+    import os as _os
     disk = get_disk_usage()
     pct = disk["percent_used"]
 
@@ -70,17 +72,32 @@ def show_disk_overview():
         color = "green"
         status = "HEALTHY"
 
-    bar_width = 40
+    try:
+        cols = _os.get_terminal_size().columns
+    except OSError:
+        cols = 80
+    bar_width = max(10, cols - 12)
     filled = int(bar_width * pct / 100)
     bar = f"[{color}]{'█' * filled}[/][dim]{'░' * (bar_width - filled)}[/]"
 
-    console.print(f"  Disk: {bar} {pct:.1f}% [{color}]{status}[/]")
-    console.print(f"  Used: {format_size(disk['used'])}  |  Free: {format_size(disk['free'])}  |  Total: {format_size(disk['total'])}")
-    console.print()
+    console.print(Panel(
+        Text.from_markup(
+            f"{bar} [bold]{pct:.1f}%[/] [{color}]{status}[/]\n\n"
+            f"[bold]Used[/]  {format_size(disk['used']):>10}    "
+            f"[bold]Free[/]  {format_size(disk['free']):>10}    "
+            f"[bold]Total[/] {format_size(disk['total']):>10}"
+        ),
+        title="[bold cyan]Disk Usage[/]",
+        border_style="cyan",
+        padding=(1, 2),
+        expand=True,
+    ))
 
 
 def run_scan_with_progress(config: Config, categories: list[Category] | None = None) -> ScanResult:
-    """Run scan with a nice progress indicator."""
+    """Run scan with a nice progress indicator and save results to cache."""
+    from disk_cleanup.cache import save_scan
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -94,6 +111,47 @@ def run_scan_with_progress(config: Config, categories: list[Category] | None = N
         result = run_scan(config, categories, progress_callback=on_progress)
         progress.update(task, description="Scan complete!")
 
+    # Always save to cache
+    save_scan(result, categories=categories)
+    return result
+
+
+def run_incremental_scan_with_progress(config: Config) -> ScanResult:
+    """Smart incremental scan — only rescans changed categories, reuses cache for the rest."""
+    from disk_cleanup.cache import save_scan, stale_categories
+    from disk_cleanup.scanner import run_incremental_scan
+    from disk_cleanup.scanners import CATEGORY_LABELS
+
+    stale = stale_categories()
+
+    if not stale:
+        console.print("  [green]All categories are fresh.[/] Using cached results.")
+        from disk_cleanup.cache import load_scan
+        result, age = load_scan()
+        if result:
+            return result
+        # Cache gone — fall back to full scan
+        stale = list(Category)
+
+    total = len(Category)
+    console.print(f"  [cyan]{len(stale)}[/] of {total} categories changed — incremental rescan")
+    console.print(f"  [dim]Skipping {total - len(stale)} unchanged categories (cached)[/]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Scanning changed categories...", total=None)
+
+        def on_progress(label: str):
+            progress.update(task, description=f"Rescanning {label}...")
+
+        result, rescanned, skipped = run_incremental_scan(
+            config, progress_callback=on_progress,
+        )
+        progress.update(task, description="Incremental scan complete!")
+
     return result
 
 
@@ -103,18 +161,25 @@ def show_scan_results(result: ScanResult):
         console.print("[green]Nothing to clean! Your disk is tidy.[/]")
         return
 
-    console.print(f"\n  Found [bold]{len(result.items)}[/] items totaling "
-                  f"[bold cyan]{format_size(result.total_size)}[/] "
-                  f"in {result.scan_time_seconds:.1f}s\n")
+    # Partition locked vs unlocked for display
+    unlocked_items, locked_items = partition_locked(result.items)
+    locked_total_size = sum(i.size_bytes for i in locked_items)
+
+    console.print(f"\n  [bold]{len(result.items)}[/] items, "
+                  f"[bold cyan]{format_size(result.total_size)}[/] reclaimable "
+                  f"[dim]({result.scan_time_seconds:.1f}s)[/]")
+    if locked_items:
+        console.print(f"  [dim]\U0001f512 {len(locked_items)} locked ({format_size(locked_total_size)})[/]")
+    console.print()
 
     # Summary table by category
     by_cat = result.by_category()
     table = Table(title="Cleanup Summary by Category", show_lines=True, border_style="dim")
     table.add_column("#", style="dim", width=3)
-    table.add_column("Category", min_width=25)
+    table.add_column("Category", no_wrap=True, overflow="ellipsis")
     table.add_column("Items", justify="right", width=6)
-    table.add_column("Size", justify="right", min_width=10)
-    table.add_column("Risk", min_width=15)
+    table.add_column("Size", justify="right", width=10, no_wrap=True)
+    table.add_column("Risk", no_wrap=True)
 
     for i, (cat, items) in enumerate(
         sorted(by_cat.items(), key=lambda x: sum(i.size_bytes for i in x[1]), reverse=True),
@@ -140,12 +205,9 @@ def show_scan_results(result: ScanResult):
 
     console.print(table)
 
-    # Risk legend
+    # Risk legend — compact single line
     console.print()
-    console.print("  [green]✓ safe[/] — always regenerated  "
-                  "[yellow]○ low[/] — probably unneeded  "
-                  "[dark_orange]△ medium[/] — review first  "
-                  "[red]✗ high[/] — do not auto-delete")
+    console.print("  [green]✓[/] safe  [yellow]○[/] low  [dark_orange]△[/] medium  [red]✗[/] high")
 
 
 def show_category_detail(items: list[CleanupItem], category: Category):
@@ -177,15 +239,21 @@ def interactive_clean(result: ScanResult, config: Config):
     if not result.items:
         return
 
-    by_cat = result.by_category()
+    # Filter out locked items — they are not actionable
+    actionable_items = filter_locked(result.items)
+    if not actionable_items:
+        console.print("\n[yellow]All items are locked. Nothing to clean.[/]")
+        return
+
+    actionable_result = ScanResult(items=actionable_items)
+    by_cat = actionable_result.by_category()
     categories = sorted(
         by_cat.items(),
         key=lambda x: sum(i.size_bytes for i in x[1]),
         reverse=True,
     )
 
-    console.print("\n[bold]Interactive Cleanup[/]")
-    console.print("Review each category and choose what to clean.\n")
+    console.print("\n[bold]Interactive Cleanup[/]\n")
 
     items_to_delete: list[CleanupItem] = []
 
@@ -288,7 +356,7 @@ def interactive_clean(result: ScanResult, config: Config):
 
 
 def cmd_scan(args):
-    """Handle the 'scan' command."""
+    """Handle the 'scan' command — supports incremental rescanning."""
     config = Config.load()
 
     categories = None
@@ -300,7 +368,18 @@ def cmd_scan(args):
             console.print(f"Available: {', '.join(c.value for c in Category)}")
             return
 
-    result = run_scan_with_progress(config, categories)
+    full = getattr(args, "full", False)
+
+    if categories:
+        # Explicit category scan — always run fresh for that category
+        result = run_scan_with_progress(config, categories)
+    elif full:
+        # Forced full rescan
+        result = run_scan_with_progress(config)
+    else:
+        # Smart incremental — only rescan what changed
+        result = run_incremental_scan_with_progress(config)
+
     show_scan_results(result)
 
 
@@ -370,8 +449,8 @@ def cmd_quick(args):
 
     result = run_scan_with_progress(config)
 
-    # Filter to safe items only
-    safe_items = [i for i in result.items if i.risk == RiskLevel.SAFE]
+    # Filter to safe items only, excluding locked
+    safe_items = filter_locked([i for i in result.items if i.risk == RiskLevel.SAFE])
 
     if not safe_items:
         console.print("[green]No safe items to clean![/]")
@@ -382,8 +461,8 @@ def cmd_quick(args):
 
     # Show what will be cleaned
     table = Table(show_lines=False, border_style="dim")
-    table.add_column("Size", justify="right", width=10)
-    table.add_column("Item")
+    table.add_column("Size", justify="right", width=10, no_wrap=True)
+    table.add_column("Item", no_wrap=True, overflow="ellipsis")
 
     for item in safe_items[:15]:
         try:
@@ -440,9 +519,9 @@ def _render_node_table(node: DirNode, disk_total: int, show_index: bool = True) 
     table = Table(show_lines=False, border_style="dim", padding=(0, 1))
     if show_index:
         table.add_column("#", style="bold cyan", width=4, justify="right")
-    table.add_column("Size", justify="right", min_width=10, style="bold")
-    table.add_column("% Disk", min_width=32)
-    table.add_column("Directory", min_width=30)
+    table.add_column("Size", justify="right", width=10, style="bold", no_wrap=True)
+    table.add_column("% Disk", width=32, no_wrap=True)
+    table.add_column("Directory", no_wrap=True, overflow="ellipsis")
 
     accounted = 0
     for i, child in enumerate(node.children, 1):
@@ -450,6 +529,10 @@ def _render_node_table(node: DirNode, disk_total: int, show_index: bool = True) 
             display = f"~/{child.path.relative_to(HOME)}"
         except ValueError:
             display = str(child.path)
+
+        # Mark locked directories
+        if is_locked(child.path):
+            display = f"\U0001f512 {display}"
 
         bar = _size_bar(child.size_bytes, disk_total)
         row = []
@@ -485,8 +568,7 @@ def cmd_map(args):
     target = Path(args.path).expanduser().resolve() if args.path else HOME
     min_size = args.min_size
 
-    console.print(f"[bold]Mapping disk usage from [cyan]{target}[/cyan]...[/]\n")
-    console.print("[dim]This scans actual disk usage — may take a minute for large directories.[/]\n")
+    console.print(f"[bold]Mapping [cyan]{target}[/cyan]...[/]\n")
 
     # Determine depth based on target
     if target == Path("/"):
@@ -511,9 +593,9 @@ def cmd_map(args):
         return
 
     # Show the results
-    console.print(f"\n[bold]Disk Usage Map: [cyan]{target}[/cyan][/]")
-    console.print(f"Total: [bold]{format_size(root.size_bytes)}[/]  |  "
-                  f"Showing directories ≥ {min_size} MB\n")
+    console.print(f"\n[bold]Disk Map: [cyan]{target}[/cyan][/]")
+    console.print(f"Total: [bold]{format_size(root.size_bytes)}[/]  │  "
+                  f"Showing \u2265 {min_size} MB\n")
 
     table = _render_node_table(root, disk_total)
     console.print(table)
@@ -529,8 +611,7 @@ def cmd_whereis(args):
     disk = get_disk_usage()
     disk_total = disk["total"]
 
-    console.print("[bold]Full System Disk Breakdown[/]")
-    console.print("[dim]Scanning all major system directories...[/]\n")
+    console.print("[bold]System Disk Breakdown[/]\n")
 
     from disk_cleanup.disk_map import get_full_disk_breakdown
 
@@ -551,9 +632,9 @@ def cmd_whereis(args):
     console.print(f"\n[bold cyan]═══ System-Level Breakdown ═══[/]\n")
 
     sys_table = Table(show_lines=False, border_style="dim", padding=(0, 1))
-    sys_table.add_column("Size", justify="right", min_width=10, style="bold")
-    sys_table.add_column("% Disk", min_width=32)
-    sys_table.add_column("Directory", min_width=20)
+    sys_table.add_column("Size", justify="right", width=10, style="bold", no_wrap=True)
+    sys_table.add_column("% Disk", width=32, no_wrap=True)
+    sys_table.add_column("Directory", no_wrap=True, overflow="ellipsis")
 
     accounted = 0
     for node in breakdown["system_overview"]:
@@ -636,6 +717,10 @@ def _interactive_drill(node: DirNode, disk_total: int, min_size_mb: float):
                     console.print("[yellow]That's not a directory — can't drill deeper.[/]")
                     continue
 
+                if is_locked(target.path):
+                    console.print(f"[yellow]\U0001f512 {target.display_path} is LOCKED — no interaction available.[/]")
+                    continue
+
                 with console.status(f"Scanning {target.display_path}..."):
                     current = drill_into(target.path, min_size_mb=min_size_mb)
 
@@ -654,6 +739,9 @@ def _interactive_drill(node: DirNode, disk_total: int, min_size_mb: float):
             # Try as a path
             target = Path(choice).expanduser().resolve()
             if target.exists() and target.is_dir():
+                if is_locked(target):
+                    console.print(f"[yellow]\U0001f512 {target} is LOCKED — no interaction available.[/]")
+                    continue
                 with console.status(f"Scanning {target}..."):
                     current = drill_into(target, min_size_mb=min_size_mb)
                 if current.children:

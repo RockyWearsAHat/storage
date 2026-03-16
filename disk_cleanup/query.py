@@ -12,6 +12,7 @@ from pathlib import Path
 
 from disk_cleanup.cache import load_scan
 from disk_cleanup.config import HOME, Config
+from disk_cleanup.locks import is_locked, partition_locked
 from disk_cleanup.scanners import CATEGORY_LABELS, Category, CleanupItem, RiskLevel, ScanResult
 from disk_cleanup.utils import format_size, get_disk_usage
 
@@ -85,10 +86,14 @@ def query_scan(
     total_before_limit = len(items)
     items = items[:limit]
 
+    # Determine which items are locked (for display marking)
+    _, locked_set = partition_locked(items)
+    locked_paths = {str(i.path.resolve()) for i in locked_set}
+
     # ── Format ─────────────────────────────────────────────────────
     if as_json:
-        return _format_json(items, total_before_limit, age)
-    return _format_text(items, total_before_limit, age)
+        return _format_json(items, total_before_limit, age, locked_paths=locked_paths)
+    return _format_text(items, total_before_limit, age, locked_paths=locked_paths)
 
 
 def query_summary(as_json: bool = False) -> str:
@@ -149,6 +154,21 @@ def query_summary(as_json: bool = False) -> str:
         if items:
             total = sum(i.size_bytes for i in items)
             lines.append(f"  {format_size(total):>10}  {risk.value} ({len(items)} items)")
+
+    # Show locked items summary
+    _, locked_items = partition_locked(list(result.items))
+    if locked_items:
+        locked_total = sum(i.size_bytes for i in locked_items)
+        lines.append("")
+        lines.append(f"\U0001f512 Locked ({len(locked_items)} items, {format_size(locked_total)}):")
+        by_lock_cat: dict[Category, list] = {}
+        for li in locked_items:
+            by_lock_cat.setdefault(li.category, []).append(li)
+        for cat, litems in sorted(by_lock_cat.items(), key=lambda x: sum(i.size_bytes for i in x[1]), reverse=True):
+            ltotal = sum(i.size_bytes for i in litems)
+            label = CATEGORY_LABELS.get(cat, cat.value)
+            lines.append(f"  {format_size(ltotal):>10}  {label} ({len(litems)} items) — protected, no actions available")
+
     return "\n".join(lines)
 
 
@@ -163,6 +183,26 @@ def path_info(target: str, as_json: bool = False) -> str:
     path = Path(target).expanduser().resolve()
     if not path.exists():
         return f"ERROR: Path does not exist: {path}"
+
+    # Block interaction with locked paths — show size + lock status only
+    if is_locked(path):
+        try:
+            if path.is_dir():
+                size = _du_bytes(path)
+            else:
+                size = path.stat().st_size
+        except OSError:
+            size = 0
+        msg = (
+            f"\U0001f512 LOCKED: {path}\n"
+            f"Size: {format_size(size)}\n"
+            f"This path is protected by a user lock. No interaction is available.\n"
+            f"To unlock: storage unlock {path}"
+        )
+        if as_json:
+            import json as _json
+            return _json.dumps({"path": str(path), "locked": True, "size": format_size(size), "size_bytes": size}, indent=2)
+        return msg
 
     try:
         stat = path.stat()
@@ -311,7 +351,8 @@ def _mdls_content_type(path: Path) -> str | None:
     return None
 
 
-def _format_json(items: list[CleanupItem], total_count: int, age: float | None) -> str:
+def _format_json(items: list[CleanupItem], total_count: int, age: float | None, *, locked_paths: set[str] | None = None) -> str:
+    lp = locked_paths or set()
     data = {
         "total_matching": total_count,
         "showing": len(items),
@@ -327,6 +368,7 @@ def _format_json(items: list[CleanupItem], total_count: int, age: float | None) 
                 "reason": item.reason,
                 "is_directory": item.is_directory,
                 "age_days": round(_file_age_days(item.path), 1),
+                "locked": str(item.path.resolve()) in lp,
             }
             for item in items
         ],
@@ -334,10 +376,11 @@ def _format_json(items: list[CleanupItem], total_count: int, age: float | None) 
     return json.dumps(data, indent=2)
 
 
-def _format_text(items: list[CleanupItem], total_count: int, age: float | None) -> str:
+def _format_text(items: list[CleanupItem], total_count: int, age: float | None, *, locked_paths: set[str] | None = None) -> str:
     if not items:
         return "No items match the query."
 
+    lp = locked_paths or set()
     lines = []
     if total_count > len(items):
         lines.append(f"Showing {len(items)} of {total_count} matching items:")
@@ -354,8 +397,12 @@ def _format_text(items: list[CleanupItem], total_count: int, age: float | None) 
         age_days = _file_age_days(item.path)
         age_str = f"{age_days:.0f}d old" if age_days > 0 else ""
 
+        is_item_locked = str(item.path.resolve()) in lp
+        lock_prefix = "\U0001f512 " if is_item_locked else "  "
+        lock_suffix = "  [LOCKED]" if is_item_locked else ""
+
         lines.append(
-            f"  {format_size(item.size_bytes):>10}  [{item.risk.value:>6}]  {display_path}"
+            f"{lock_prefix}{format_size(item.size_bytes):>10}  [{item.risk.value:>6}]  {display_path}{lock_suffix}"
         )
         lines.append(
             f"             {item.reason}  {age_str}"

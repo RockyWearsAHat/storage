@@ -12,6 +12,10 @@ CACHE_DIRS = [
     HOME / "Library" / "Caches",
 ]
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = [HOME / "Library" / "Caches"]
+SCAN_DEPTH = 1
+
 # Specific large cache subdirs worth calling out individually
 NOTABLE_CACHES = [
     ("com.apple.Safari", "Safari Cache"),

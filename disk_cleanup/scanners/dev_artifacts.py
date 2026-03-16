@@ -56,6 +56,7 @@ SCAN_ROOTS = [
 
 # Max depth to search for artifact directories
 MAX_DEPTH = 6
+SCAN_DEPTH = MAX_DEPTH
 
 
 def scan_dev_artifacts(config: Config) -> list[CleanupItem]:

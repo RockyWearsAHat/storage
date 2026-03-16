@@ -103,6 +103,13 @@ MIN_FILE_SIZE = 50 * 1024 * 1024
 MIN_DIR_SIZE = 100 * 1024 * 1024
 MAX_DEPTH = 5
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = (
+    [p for p, _, _ in APP_SCRATCH_DIRS]  # shallow stat
+    + list(PROJECT_SCAN_DIRS)             # deep walk
+)
+SCAN_DEPTH = MAX_DEPTH
+
 
 def scan_save_files(config: Config) -> list[CleanupItem]:
     """Find large creative-app project files and scratch directories."""

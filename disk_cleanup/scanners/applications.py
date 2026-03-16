@@ -12,6 +12,10 @@ APP_DIRS = [
     HOME / "Applications",
 ]
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = list(APP_DIRS)
+SCAN_DEPTH = 1
+
 # Threshold: flag apps larger than this
 MIN_SIZE = 500 * 1024 * 1024  # 500 MB
 

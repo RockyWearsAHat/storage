@@ -1,3 +1,6 @@
+DEVELOPER NOTE:
+This project needs a lot of cleanup and ensurance that only the proper interaction points remain. It is fully functional as intended but has an excess of code & different defined paths that benefit nothing. Here are some screenshots of what this project is capable of.
+
 # storage
 
 AI-assisted disk management for macOS. Scans, maps, and cleans your disk from a single interactive terminal.

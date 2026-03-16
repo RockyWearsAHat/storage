@@ -48,6 +48,16 @@ VSCODE_DIRS = [
 
 MIN_SIZE = 100 * 1024 * 1024  # 100 MB
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+# Include ~/.cache (catch-all) and major known root dirs
+SCAN_ROOTS = (
+    [p for p, _, _ in MODEL_CACHE_DIRS]
+    + [p for p, _, _ in GAME_DIRS]
+    + [p for p, _, _ in VSCODE_DIRS]
+    + [HOME / ".cache"]  # catch-all for unknown caches
+)
+SCAN_DEPTH = 0  # we only stat known dirs + iterdir ~/.cache (shallow)
+
 
 def scan_model_caches(config: Config) -> list[CleanupItem]:
     """Find AI/ML model caches, package manager caches, and heavy app data."""

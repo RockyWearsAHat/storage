@@ -52,6 +52,61 @@ def cmd_rm(args):
     print(result.output)
 
 
+def cmd_manifest(args):
+    """Handle the `storage manifest` subcommand — show manifest status."""
+    from disk_cleanup.manifest import load_manifest, discover_new_paths
+    from disk_cleanup.scanners import CATEGORY_LABELS, Category
+    from disk_cleanup.utils import format_size
+    from datetime import datetime, timezone
+
+    manifest = load_manifest()
+    if manifest is None:
+        print("No manifest found. Run `storage scan` to build one.")
+        return
+
+    created = manifest.get("created", 0)
+    updated = manifest.get("updated", 0)
+    last_full = manifest.get("last_full_discovery", 0)
+    paths = manifest.get("paths", {})
+
+    def _ts(t: float) -> str:
+        if not t:
+            return "never"
+        return datetime.fromtimestamp(t, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+    print(f"Manifest v{manifest.get('version', '?')}")
+    print(f"  Created:        {_ts(created)}")
+    print(f"  Last updated:   {_ts(updated)}")
+    print(f"  Last full scan: {_ts(last_full)}")
+    print()
+
+    total_paths = 0
+    for cat_val in sorted(paths.keys()):
+        entries = paths[cat_val]
+        total_paths += len(entries)
+        try:
+            label = CATEGORY_LABELS.get(Category(cat_val), cat_val)
+        except ValueError:
+            label = cat_val
+        existing = sum(1 for e in entries if e.get("exists", True))
+        print(f"  {label:<35} {existing:>4} paths")
+
+    print(f"\n  Total tracked paths: {total_paths}")
+
+    # Show newly discovered paths
+    new = discover_new_paths()
+    if new:
+        print(f"\n  New directories discovered ({sum(len(v) for v in new.values())} total):")
+        for cat, dirs in new.items():
+            label = CATEGORY_LABELS.get(cat, cat.value)
+            for d in dirs[:5]:
+                print(f"    [{label}] {d}")
+            if len(dirs) > 5:
+                print(f"    ... and {len(dirs) - 5} more")
+    else:
+        print("\n  No new directories discovered.")
+
+
 def cmd_empty_trash(args):
     """Handle the `storage empty-trash` subcommand."""
     from disk_cleanup.cache import invalidate_scan
@@ -95,13 +150,67 @@ def cmd_empty_trash(args):
         print("FAIL  Could not empty Trash.")
 
 
-def _launch_repl():
+def cmd_lock(args):
+    """Handle the `storage lock` subcommand."""
+    from disk_cleanup.locks import lock_path
+    reason = getattr(args, "reason", "") or ""
+    ok, msg = lock_path(args.path, reason=reason)
+    print(msg)
+
+
+def cmd_unlock(args):
+    """Handle the `storage unlock` subcommand."""
+    from disk_cleanup.locks import unlock_path
+    ok, msg = unlock_path(args.path)
+    print(msg)
+
+
+def cmd_locks(args):
+    """Handle the `storage locks` subcommand — list all locks."""
+    from datetime import datetime, timezone
+    from disk_cleanup.locks import list_locks
+    from disk_cleanup.utils import format_size
+    from pathlib import Path
+
+    locks = list_locks()
+    if not locks:
+        print("No locked paths.")
+        return
+
+    print(f"{len(locks)} locked path(s):\n")
+    for entry in locks:
+        p = Path(entry["path"])
+        locked_at = entry.get("locked_at", 0)
+        reason = entry.get("reason", "")
+        ts = datetime.fromtimestamp(locked_at, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M") if locked_at else "unknown"
+
+        # Get current size
+        try:
+            if p.is_dir():
+                import subprocess
+                out = subprocess.run(["du", "-sk", str(p)], capture_output=True, text=True, timeout=30)
+                size = int(out.stdout.split()[0]) * 1024
+            elif p.exists():
+                size = p.stat().st_size
+            else:
+                size = 0
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            size = 0
+
+        size_str = format_size(size) if size else "?"
+        print(f"  \U0001f512 {p}  ({size_str})")
+        print(f"     Locked: {ts}" + (f"  Reason: {reason}" if reason else ""))
+        if not p.exists():
+            print(f"     \u26a0\ufe0f  Path no longer exists")
+
+
+def _launch_repl(*, yolo: bool = True):
     """Launch the custom storage REPL."""
     from disk_cleanup.repl import run_repl
-    run_repl()
+    run_repl(yolo=yolo)
 
 
-def _one_shot(prompt: str):
+def _one_shot(prompt: str, *, yolo: bool = True):
     """Run a single prompt through Copilot and print the result."""
     import os
     from disk_cleanup.repl import _find_copilot, _get_model, _load_prefs, _run_copilot
@@ -110,24 +219,33 @@ def _one_shot(prompt: str):
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     model = _get_model(_load_prefs())
 
-    _run_copilot(copilot_bin, model, prompt, project_root)
+    _run_copilot(copilot_bin, model, prompt, project_root, yolo=yolo)
 
 
 def main():
+    # Parse global flags before dispatching
+    yolo = "--no-yolo" not in sys.argv
+    argv = [a for a in sys.argv[1:] if a != "--no-yolo"]
+
     # No arguments → launch the REPL
-    if len(sys.argv) == 1:
-        _launch_repl()
+    if not argv:
+        _launch_repl(yolo=yolo)
         return
 
     # Check if the first arg is a known subcommand; if not, treat everything
     # as a natural-language prompt for Copilot (one-shot mode)
     known_commands = {
         "scan", "clean", "analyze", "overview", "quick", "map", "whereis",
-        "query", "info", "rm", "empty-trash", "-h", "--help", "-i", "--interactive",
+        "query", "info", "rm", "empty-trash", "manifest",
+        "lock", "unlock", "locks",
+        "-h", "--help", "-i", "--interactive",
     }
-    if sys.argv[1] not in known_commands:
-        _one_shot(" ".join(sys.argv[1:]))
+    if argv[0] not in known_commands:
+        _one_shot(" ".join(argv), yolo=yolo)
         return
+
+    # Restore sys.argv for argparse (without --no-yolo)
+    sys.argv = [sys.argv[0]] + argv
 
     # Otherwise, parse and run the subcommand (these are what Copilot calls)
     from disk_cleanup.cli import (
@@ -142,8 +260,10 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # scan
-    p_scan = subparsers.add_parser("scan", help="Scan for cleanable files")
+    p_scan = subparsers.add_parser("scan", help="Scan for cleanable files (incremental by default)")
     p_scan.add_argument("--category", "-c", help="Scan a specific category only")
+    p_scan.add_argument("--full", action="store_true",
+                        help="Force a full rescan (skip incremental optimization)")
     p_scan.set_defaults(func=cmd_scan)
 
     # clean
@@ -228,6 +348,30 @@ def main():
     p_empty.add_argument("--confirm", action="store_true",
                          help="Actually empty the Trash (without this flag, only shows what's in it)")
     p_empty.set_defaults(func=cmd_empty_trash)
+
+    # manifest
+    p_manifest = subparsers.add_parser("manifest",
+                                       help="Show the adaptive scan manifest (debug)")
+    p_manifest.set_defaults(func=cmd_manifest)
+
+    # lock
+    p_lock = subparsers.add_parser("lock",
+                                   help="Lock a path — protects it from all operations")
+    p_lock.add_argument("path", help="Path to lock")
+    p_lock.add_argument("--reason", "-r", default="",
+                        help="Optional reason for locking")
+    p_lock.set_defaults(func=cmd_lock)
+
+    # unlock
+    p_unlock = subparsers.add_parser("unlock",
+                                     help="Unlock a previously locked path")
+    p_unlock.add_argument("path", help="Path to unlock")
+    p_unlock.set_defaults(func=cmd_unlock)
+
+    # locks
+    p_locks = subparsers.add_parser("locks",
+                                    help="List all locked paths")
+    p_locks.set_defaults(func=cmd_locks)
 
     args = parser.parse_args()
 

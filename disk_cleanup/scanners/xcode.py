@@ -8,6 +8,17 @@ from disk_cleanup.utils import dir_size, get_file_age_days, is_excluded
 
 MIN_SIZE = 50 * 1024 * 1024  # 50 MB
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = [
+    HOME / "Library" / "Developer" / "Xcode" / "DerivedData",
+    HOME / "Library" / "Developer" / "Xcode" / "Archives",
+    HOME / "Library" / "Developer" / "Xcode" / "iOS DeviceSupport",
+    HOME / "Library" / "Developer" / "Xcode" / "watchOS DeviceSupport",
+    HOME / "Library" / "Developer" / "CoreSimulator" / "Devices",
+    HOME / "Library" / "Developer" / "CoreSimulator" / "Caches",
+]
+SCAN_DEPTH = 1
+
 
 def scan_xcode(config: Config) -> list[CleanupItem]:
     """Find Xcode-generated data that can be cleaned."""

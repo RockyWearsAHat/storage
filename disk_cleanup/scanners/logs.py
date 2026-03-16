@@ -12,6 +12,10 @@ LOG_DIRS = [
     (HOME / "Library" / "Logs" / "DiagnosticReports", "Crash Reports"),
 ]
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = [HOME / "Library" / "Logs"]
+SCAN_DEPTH = 1
+
 MIN_REPORT_SIZE = 1 * 1024 * 1024  # 1 MB
 
 

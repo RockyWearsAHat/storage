@@ -21,6 +21,10 @@ SKIP_EXTENSIONS = frozenset({
 
 MAX_DEPTH = 5
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = list(SCAN_DIRS)
+SCAN_DEPTH = MAX_DEPTH
+
 
 def scan_large_files(config: Config) -> list[CleanupItem]:
     """Find files larger than the configured threshold."""

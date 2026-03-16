@@ -11,8 +11,9 @@ SAFETY RULES:
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from disk_cleanup.cache import invalidate_scan, load_scan
+from disk_cleanup.cache import invalidate_categories, invalidate_scan, load_scan
 from disk_cleanup.config import Config, HOME
+from disk_cleanup.locks import is_locked
 from disk_cleanup.scanners import RiskLevel
 from disk_cleanup.utils import format_size, is_protected, move_to_trash, permanent_delete
 
@@ -80,6 +81,12 @@ def remove_paths(
             failures += 1
             continue
 
+        # Check user locks
+        if is_locked(path):
+            lines.append(f"  BLOCKED  {path} — \U0001f512 LOCKED by user, will not touch")
+            failures += 1
+            continue
+
         # Check risk level from scan data
         risk_info = scan_lookup.get(str(path))
         risk_level = risk_info[0] if risk_info else "unknown"
@@ -138,9 +145,25 @@ def remove_paths(
     lines.append("")
     if confirm:
         lines.append(f"Done: {successes} removed, {failures} failed/blocked, {format_size(bytes_affected)} freed")
-        # Invalidate scan cache so subsequent queries reflect the deletions
+        # Surgically invalidate only affected categories (not the whole cache)
         if successes > 0:
-            invalidate_scan()
+            affected_cats = set()
+            for p in resolved:
+                info = scan_lookup.get(str(p))
+                if info and len(info) >= 3:
+                    # scan_lookup stores (risk, reason) - look up category from scan items
+                    pass
+            # Find categories of deleted paths from scan data
+            result_data, _ = load_scan()
+            if result_data:
+                deleted_strs = {str(p) for p in resolved}
+                for item in result_data.items:
+                    if str(item.path) in deleted_strs:
+                        affected_cats.add(item.category)
+            if affected_cats:
+                invalidate_categories(list(affected_cats))
+            else:
+                invalidate_scan()
         # Remind user about Trash if items were moved there (not permanently deleted)
         any_trashed = not (permanent or not config.use_trash) and successes > 0
         all_were_trash_paths = all(

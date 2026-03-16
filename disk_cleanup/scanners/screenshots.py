@@ -15,6 +15,10 @@ SCREENSHOT_LOCATIONS = [
     HOME / "Pictures",
 ]
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = list(SCREENSHOT_LOCATIONS)
+SCAN_DEPTH = 0
+
 
 def scan_screenshots(config: Config) -> list[CleanupItem]:
     """Find screenshots and screen recordings."""

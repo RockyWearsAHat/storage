@@ -18,6 +18,10 @@ SCAN_DIRS = [
 MIN_SIZE = 1 * 1024 * 1024  # 1 MB
 MAX_DEPTH = 4
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = list(SCAN_DIRS)
+SCAN_DEPTH = MAX_DEPTH
+
 
 def scan_duplicates(config: Config) -> list[CleanupItem]:
     """Find duplicate files by content hash."""

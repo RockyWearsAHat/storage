@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from disk_cleanup.config import Config
+from disk_cleanup.locks import is_locked
 from disk_cleanup.scanners import CleanupItem, RiskLevel
 from disk_cleanup.utils import format_size, is_protected, move_to_trash, permanent_delete
 
@@ -17,6 +18,9 @@ def delete_item(item: CleanupItem, config: Config, permanent: bool = False) -> t
     # Safety checks
     if is_protected(path, config):
         return False, f"BLOCKED: {path} is a protected path"
+
+    if is_locked(path):
+        return False, f"BLOCKED: {path} is \U0001f512 LOCKED by user"
 
     if not path.exists():
         return False, f"Already gone: {path}"

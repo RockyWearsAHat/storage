@@ -17,6 +17,10 @@ ARCHIVE_EXTENSIONS = frozenset({
 
 MIN_SIZE = 1 * 1024 * 1024  # 1 MB
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+SCAN_ROOTS = [HOME / "Downloads"]
+SCAN_DEPTH = 1
+
 
 def scan_downloads(config: Config) -> list[CleanupItem]:
     """Find old or unnecessary files in Downloads."""

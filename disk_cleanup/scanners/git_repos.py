@@ -25,6 +25,7 @@ SCAN_ROOTS = [
 ]
 
 MAX_DEPTH = 5
+SCAN_DEPTH = MAX_DEPTH
 
 
 def scan_git_repos(config: Config) -> list[CleanupItem]:

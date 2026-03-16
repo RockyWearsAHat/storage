@@ -8,6 +8,13 @@ from disk_cleanup.utils import dir_size, is_excluded
 
 MIN_SIZE = 100 * 1024 * 1024  # 100 MB
 
+# Fingerprinting: roots and walk depth for incremental scan detection
+# scan_messages checks ~/Library/Messages, scan_containers checks ~/Library/Containers
+SCAN_ROOTS_MESSAGES = [HOME / "Library" / "Messages"]
+SCAN_DEPTH_MESSAGES = 0
+SCAN_ROOTS_CONTAINERS = [HOME / "Library" / "Containers"]
+SCAN_DEPTH_CONTAINERS = 1
+
 
 def scan_messages(config: Config) -> list[CleanupItem]:
     """Find Messages app data (attachments, chat history)."""
